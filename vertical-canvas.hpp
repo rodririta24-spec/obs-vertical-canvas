@@ -458,6 +458,7 @@ public:
 	obs_data_t *SaveSettings();
 
 	obs_scene_t *GetCurrentScene();
+	obs_scene_t *GetSceneByName(const QString &name);
 	std::vector<QString> GetScenes();
 	bool StreamingActive();
 	bool RecordingActive();

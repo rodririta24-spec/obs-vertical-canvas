@@ -357,6 +357,87 @@ void vendor_request_version(obs_data_t *request_data, obs_data_t *response_data,
 	obs_data_set_bool(response_data, "success", true);
 }
 
+struct SetVisibleData {
+	const char *item_name;
+	bool visible;
+	bool found;
+};
+
+void vendor_request_get_scene_items(obs_data_t *request_data, obs_data_t *response_data, void *)
+{
+	const char *scene_name = obs_data_get_string(request_data, "scene");
+	if (!scene_name || !strlen(scene_name)) {
+		obs_data_set_string(response_data, "error", "'scene' not set");
+		obs_data_set_bool(response_data, "success", false);
+		return;
+	}
+	for (const auto &it : canvas_docks) {
+		obs_scene_t *scene = it->GetSceneByName(QString::fromUtf8(scene_name));
+		if (!scene)
+			continue;
+		auto arr = obs_data_array_create();
+		obs_scene_enum_items(
+			scene,
+			[](obs_scene_t *, obs_sceneitem_t *item, void *param) -> bool {
+				auto *a = static_cast<obs_data_array_t *>(param);
+				obs_source_t *src = obs_sceneitem_get_source(item);
+				auto d = obs_data_create();
+				obs_data_set_string(d, "name", obs_source_get_name(src));
+				obs_data_set_bool(d, "visible", obs_sceneitem_visible(item));
+				obs_data_array_push_back(a, d);
+				obs_data_release(d);
+				return true;
+			},
+			arr);
+		obs_data_set_array(response_data, "items", arr);
+		obs_data_array_release(arr);
+		obs_data_set_bool(response_data, "success", true);
+		return;
+	}
+	obs_data_set_string(response_data, "error", "scene not found");
+	obs_data_set_bool(response_data, "success", false);
+}
+
+void vendor_request_set_item_visible(obs_data_t *request_data, obs_data_t *response_data, void *)
+{
+	const char *scene_name = obs_data_get_string(request_data, "scene");
+	const char *item_name = obs_data_get_string(request_data, "item");
+	if (!scene_name || !strlen(scene_name) || !item_name || !strlen(item_name)) {
+		obs_data_set_string(response_data, "error", "'scene' and 'item' are required");
+		obs_data_set_bool(response_data, "success", false);
+		return;
+	}
+	bool visible = obs_data_get_bool(request_data, "visible");
+	for (const auto &it : canvas_docks) {
+		obs_scene_t *scene = it->GetSceneByName(QString::fromUtf8(scene_name));
+		if (!scene)
+			continue;
+		SetVisibleData data = {item_name, visible, false};
+		obs_scene_enum_items(
+			scene,
+			[](obs_scene_t *, obs_sceneitem_t *item, void *param) -> bool {
+				auto *d = static_cast<SetVisibleData *>(param);
+				obs_source_t *src = obs_sceneitem_get_source(item);
+				if (strcmp(obs_source_get_name(src), d->item_name) == 0) {
+					obs_sceneitem_set_visible(item, d->visible);
+					d->found = true;
+					return false;
+				}
+				return true;
+			},
+			&data);
+		if (data.found) {
+			obs_data_set_bool(response_data, "success", true);
+			return;
+		}
+		obs_data_set_string(response_data, "error", "item not found in scene");
+		obs_data_set_bool(response_data, "success", false);
+		return;
+	}
+	obs_data_set_string(response_data, "error", "scene not found");
+	obs_data_set_bool(response_data, "success", false);
+}
+
 void vendor_request_switch_scene(obs_data_t *request_data, obs_data_t *response_data, void *)
 {
 	const char *scene_name = obs_data_get_string(request_data, "scene");
@@ -681,6 +762,8 @@ void obs_module_post_load(void)
 	obs_websocket_vendor_register_request(vendor, "switch_scene", vendor_request_switch_scene, nullptr);
 	obs_websocket_vendor_register_request(vendor, "current_scene", vendor_request_current_scene, nullptr);
 	obs_websocket_vendor_register_request(vendor, "get_scenes", vendor_request_get_scenes, nullptr);
+	obs_websocket_vendor_register_request(vendor, "get_scene_items", vendor_request_get_scene_items, nullptr);
+	obs_websocket_vendor_register_request(vendor, "set_item_visible", vendor_request_set_item_visible, nullptr);
 	obs_websocket_vendor_register_request(vendor, "status", vendor_request_status, nullptr);
 	obs_websocket_vendor_register_request(vendor, "start_streaming", vendor_request_invoke, (void *)"StartStream");
 	obs_websocket_vendor_register_request(vendor, "stop_streaming", vendor_request_invoke, (void *)"StopStream");
@@ -6540,6 +6623,11 @@ void CanvasDock::DestroyVideo()
 obs_scene_t *CanvasDock::GetCurrentScene()
 {
 	return scene;
+}
+
+obs_scene_t *CanvasDock::GetSceneByName(const QString &name)
+{
+	return obs_canvas_get_scene_by_name(canvas, name.toUtf8().constData());
 }
 
 std::vector<QString> CanvasDock::GetScenes()
